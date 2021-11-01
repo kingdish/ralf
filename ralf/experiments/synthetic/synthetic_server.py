@@ -15,9 +15,11 @@ from ralf.client import RalfClient
 
 @ray.remote
 class CounterSource(Source):
-    def __init__(self, send_up_to: int):
+    def __init__(self, send_up_to: int, num_keys: int, frequency: float):
         self.count = 0
         self.send_up_to = send_up_to
+        self.num_keys = num_keys
+        self.frequency = frequency
 
         super().__init__(
             schema=Schema(
@@ -30,7 +32,7 @@ class CounterSource(Source):
         )
 
     def next(self) -> Record:
-        time.sleep(1)
+        time.sleep(1 / self.frequency)
         if self.count == 0:
             # Wait for downstream operators to come online.
             time.sleep(0.2)
@@ -38,7 +40,7 @@ class CounterSource(Source):
         if self.count > self.send_up_to:
             raise StopIteration()
         return [Record(
-            key=str(self.count % 3), 
+            key=str(self.count % self.num_keys), 
             value=self.count,
             create_time=time.time()
         )]
@@ -59,6 +61,7 @@ class SlowIdentity(Operator):
     def __init__(
         self,
         result_queue: Queue,
+        processing_time: float,
         processing_policy=processing_policy.fifo,
         load_shedding_policy=load_shedding_policy.always_process,
     ):
@@ -70,9 +73,10 @@ class SlowIdentity(Operator):
             load_shedding_policy=load_shedding_policy,
         )
         self.q = result_queue
+        self.processing_time = processing_time
 
     def on_record(self, record: Record) -> Optional[Record]:
-        time.sleep(0.1)
+        time.sleep(self.processing_time)
         record = Record(
             key=record.key,
             value=record.value,
@@ -87,21 +91,15 @@ class SlowIdentity(Operator):
 
 
 def create_synthetic_pipeline(queue):
-
-    # create Ralf instance
-    # ralf_conn = Ralf(metric_dir=os.path.join(args.exp_dir, args.exp))
-    # ralf_conn = Ralf(
-    #     metric_dir=os.path.join(args.exp_dir, args.exp), log_wandb=True, exp_id=args.exp
-    # )
-
     ralf = Ralf()
     
     # create pipeline
-    source_table = Table([], CounterSource, 100)
+    source_table = Table([], CounterSource, 100, 3, 1)
 
     sink = source_table.map(
         SlowIdentity,
-        queue
+        queue,
+        0.1
     ).as_queryable("sink")
     
     # deploy
