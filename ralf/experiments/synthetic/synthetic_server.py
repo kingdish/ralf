@@ -15,11 +15,12 @@ from ralf.client import RalfClient
 
 @ray.remote
 class CounterSource(Source):
-    def __init__(self, send_up_to: int, num_keys: int, frequency: float):
+    def __init__(self, send_up_to: int, num_keys: int, send_rate: float):
         self.count = 0
         self.send_up_to = send_up_to
         self.num_keys = num_keys
-        self.frequency = frequency
+        self.send_rate = send_rate
+        self.num_worker_threads = 1
 
         super().__init__(
             schema=Schema(
@@ -32,7 +33,7 @@ class CounterSource(Source):
         )
 
     def next(self) -> Record:
-        time.sleep(1 / self.frequency)
+        time.sleep(1 / self.send_rate)
         if self.count == 0:
             # Wait for downstream operators to come online.
             time.sleep(0.2)
@@ -64,6 +65,7 @@ class SlowIdentity(Operator):
         processing_time: float,
         processing_policy=processing_policy.fifo,
         load_shedding_policy=load_shedding_policy.always_process,
+        lazy=False
     ):
         super().__init__(
             schema=Schema("key", {"value": int}),
@@ -71,6 +73,7 @@ class SlowIdentity(Operator):
             num_worker_threads=1,
             processing_policy=processing_policy,
             load_shedding_policy=load_shedding_policy,
+            lazy=lazy
         )
         self.q = result_queue
         self.processing_time = processing_time
@@ -80,26 +83,23 @@ class SlowIdentity(Operator):
         record = Record(
             key=record.key,
             value=record.value,
-            create_time=record.create_time,
+            create_time=time.time(),
         )
         self.q.put(record)
         return record
-
-    @classmethod
-    def drop_smaller_values(cls, candidate: Record, current: Record):
-        return candidate.value > current.value
 
 
 def create_synthetic_pipeline(queue):
     ralf = Ralf()
     
     # create pipeline
-    source_table = Table([], CounterSource, 100, 3, 1)
+    source_table = Table([], CounterSource, 1000000, 3, 1000)
 
     sink = source_table.map(
         SlowIdentity,
         queue,
-        0.1
+        2,
+        lazy=True
     ).as_queryable("sink")
     
     # deploy

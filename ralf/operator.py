@@ -5,6 +5,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from queue import PriorityQueue
 from typing import Callable, List, Optional
+import threading
 
 import psutil
 import ray
@@ -255,23 +256,39 @@ class Operator(ABC):
         return self._table.schema
 
     # Table data query functions
+    async def _update_record(self, key: str):
+        # Bug: stateful operators that produce output dependent on an
+        # ordered lineage of parent records.
+        parent_records = await asyncio.gather(
+            *[parent.get_async(key) for parent in self.get_parents()]
+        )
+
+        # Force the thread pool to quickly service the requests.
+        # TODO: submit via the events queue to prioritize requests.
+        futures = []
+        for parent_record in parent_records:
+            task = self._thread_pool.submit(self._on_record_helper, parent_record)
+            futures.append(asyncio.wrap_future(task))
+        await asyncio.gather(*futures)
 
     async def get(self, key: str):
+        def _update_record_helper(args):
+            """
+            A helper function to make async function compatible as the target of Thread
+            """
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self._update_record(args))
+            loop.close()
+
         if self._lazy:
-            # Bug: stateful operators that produce output dependent on an
-            # ordered lineage of parent records.
-            parent_records = await asyncio.gather(
-                *[parent.get_async(key) for parent in self.get_parents()]
-            )
-
-            # Force the thread pool to quickly service the requests.
-            # TODO: submit via the events queue to prioritize requests.
-            futures = []
-            for parent_record in parent_records:
-                task = self._thread_pool.submit(self._on_record_helper, parent_record)
-                futures.append(asyncio.wrap_future(task))
-            await asyncio.gather(*futures)
-
+            await self._update_record(key)
+            # if not self._table.try_point_query(key):
+            #     await self._update_record(key)
+            # else:
+            #     lazy_thread = threading.Thread(target=_update_record_helper, name="_update_record", args=(key))
+            #     lazy_thread.start()
+            
         record = self._table.point_query(key)
         return record
 
