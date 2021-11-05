@@ -282,12 +282,12 @@ class Operator(ABC):
             loop.close()
 
         if self._lazy:
-            await self._update_record(key)
-            # if not self._table.try_point_query(key):
-            #     await self._update_record(key)
-            # else:
-            #     lazy_thread = threading.Thread(target=_update_record_helper, name="_update_record", args=(key))
-            #     lazy_thread.start()
+            # await self._update_record(key)
+            if not self._table.try_point_query(key):
+                await self._update_record(key)
+            else:
+                lazy_thread = threading.Thread(target=_update_record_helper, name="_update_record", args=(key))
+                lazy_thread.start()
             
         record = self._table.point_query(key)
         return record
