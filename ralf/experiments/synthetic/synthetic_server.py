@@ -20,7 +20,7 @@ class CounterSource(Source):
         self.send_up_to = send_up_to
         self.num_keys = num_keys
         self.send_rate = send_rate
-        self.num_worker_threads = 1
+        self.num_worker_threads = 4
 
         super().__init__(
             schema=Schema(
@@ -70,7 +70,7 @@ class SlowIdentity(Operator):
         super().__init__(
             schema=Schema("key", {"value": int}),
             cache_size=DEFAULT_STATE_CACHE_SIZE,
-            num_worker_threads=1,
+            num_worker_threads=4,
             processing_policy=processing_policy,
             load_shedding_policy=load_shedding_policy,
             lazy=lazy
@@ -93,12 +93,13 @@ def create_synthetic_pipeline(queue):
     ralf = Ralf()
     
     # create pipeline
-    source_table = Table([], CounterSource, 1000000, 3, 1000)
+    # source_table = Table([], CounterSource, 1000000, 3, 1000)
+    source_table = Table([], CounterSource, 1000000, 3000, 100000)
 
     sink = source_table.map(
         SlowIdentity,
         queue,
-        2,
+        0.1,
         lazy=True
     ).as_queryable("sink")
     

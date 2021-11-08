@@ -79,10 +79,12 @@ class Event:
         work: Callable[[], None],
         record: Record,
         processing_policy: Callable[["Event", "Event"], bool],
+        is_async: bool = False
     ):
         self._work = work
         self.record = record
         self._processing_policy = processing_policy
+        self.is_async = is_async
 
     def __lt__(self, other) -> bool:
         return self._processing_policy(self.record, other.record)
@@ -91,7 +93,13 @@ class Event:
         return self._time == other._time
 
     def process(self):
-        self._work()
+        if self.is_async:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self._work())
+            loop.close()
+        else:
+            self._work()
 
 
 class Operator(ABC):
@@ -134,10 +142,14 @@ class Operator(ABC):
         self._lazy = lazy
         self._events = PriorityQueue()
         self._running = True
-        self._thread_pool = ThreadPoolExecutor(num_worker_threads)
         self._processing_policy = processing_policy
         self._load_shedding_policy = load_shedding_policy
         if not self._lazy:
+            self._thread_pool = ThreadPoolExecutor(num_worker_threads)
+            for _ in range(num_worker_threads):
+                self._thread_pool.submit(self._worker)
+        else:
+            self._thread_pool = ThreadPoolExecutor(num_worker_threads + 1) # extra thread for retrieving initial value
             for _ in range(num_worker_threads):
                 self._thread_pool.submit(self._worker)
 
@@ -272,25 +284,21 @@ class Operator(ABC):
         await asyncio.gather(*futures)
 
     async def get(self, key: str):
-        def _update_record_helper(args):
-            """
-            A helper function to make async function compatible as the target of Thread
-            """
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self._update_record(args))
-            loop.close()
-
         if self._lazy:
-            # await self._update_record(key)
-            if not self._table.try_point_query(key):
+            try:
+                record = self._table.point_query(key)
+                event = Event(
+                    lambda: self._update_record(key), record, self._processing_policy, is_async=True
+                )
+                self._events.put(event)
+                return record
+            except KeyError:
                 await self._update_record(key)
-            else:
-                lazy_thread = threading.Thread(target=_update_record_helper, name="_update_record", args=(key))
-                lazy_thread.start()
-            
-        record = self._table.point_query(key)
-        return record
+                record = self._table.point_query(key)
+                return record
+        else:
+            record = self._table.point_query(key)
+            return record
 
     def get_all(self):
         # TODO: Generate missing values

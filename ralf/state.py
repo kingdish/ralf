@@ -75,9 +75,6 @@ class TableState:
         if key not in self.records:
             raise KeyError(f"Key {key} not found.")
         return self.records[key]
-    
-    def try_point_query(self, key) -> bool:
-        return key in self.records
 
     def bulk_query(self) -> List[Record]:
         return list(self.records.values())
