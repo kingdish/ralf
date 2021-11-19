@@ -13,6 +13,13 @@ from ralf.state import Record, Schema
 from ralf.table import Table
 from ralf.client import RalfClient
 
+SEND_UP_TO = 1000000
+NUM_KEYS = 3000
+SEND_RATE = 50
+RUN_DURATION = 60
+LAZY = False
+PROCESSING_TIME = 0.01
+
 @ray.remote
 class CounterSource(Source):
     def __init__(self, send_up_to: int, num_keys: int, send_rate: float):
@@ -79,12 +86,16 @@ class SlowIdentity(Operator):
         self.processing_time = processing_time
 
     def on_record(self, record: Record) -> Optional[Record]:
-        time.sleep(self.processing_time)
+        time.sleep(self.processing_time)  # this is the artificial procesing time eg. featurization
         record = Record(
             key=record.key,
             value=record.value,
-            create_time=time.time(),
+            create_time=record.create_time,
         )
+        # user          1       1
+        # query         10      10
+        # on_record     11      2
+        # return        12      12
         self.q.put(record)
         return record
 
@@ -94,13 +105,13 @@ def create_synthetic_pipeline(queue):
     
     # create pipeline
     # source_table = Table([], CounterSource, 1000000, 3, 1000)
-    source_table = Table([], CounterSource, 1000000, 3000, 100000)
+    source_table = Table([], CounterSource, SEND_UP_TO, NUM_KEYS, SEND_RATE) #send_up_to, num_keys, send_rate
 
     sink = source_table.map(
         SlowIdentity,
         queue,
-        0.1,
-        lazy=True
+        PROCESSING_TIME,
+        lazy=LAZY
     ).as_queryable("sink")
     
     # deploy
@@ -117,7 +128,7 @@ def main():
     ralf.run()
 
     # snapshot stats
-    run_duration = 20
+    run_duration = RUN_DURATION
     snapshot_interval = 2
     start = time.time()
     while time.time() - start < run_duration:
