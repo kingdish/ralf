@@ -15,8 +15,8 @@ from ralf.client import RalfClient
 
 import redis
 
-SEND_UP_TO = 1000000
-NUM_KEYS = 3000
+SEND_UP_TO = 100 # 1000000
+NUM_KEYS = 30 # 3000
 SEND_RATE = 500
 RUN_DURATION = 60
 LAZY = False
@@ -42,7 +42,7 @@ class CounterSource(Source):
         )
         self.click_stream = redis.StrictRedis(
             host="localhost",
-            port=8002,
+            port=8003,
             db=0,
             password=None,
         )
