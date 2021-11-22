@@ -13,12 +13,14 @@ from ralf.state import Record, Schema
 from ralf.table import Table
 from ralf.client import RalfClient
 
+import redis
+
 SEND_UP_TO = 1000000
 NUM_KEYS = 3000
-SEND_RATE = 50
+SEND_RATE = 500
 RUN_DURATION = 60
 LAZY = False
-PROCESSING_TIME = 0.01
+PROCESSING_TIME = 0.001
 
 @ray.remote
 class CounterSource(Source):
@@ -38,20 +40,51 @@ class CounterSource(Source):
                 }),
             cache_size=DEFAULT_STATE_CACHE_SIZE,
         )
+        self.click_stream = redis.StrictRedis(
+            host="localhost",
+            port=8003,
+            db=0,
+            password=None,
+        )
 
     def next(self) -> Record:
-        time.sleep(1 / self.send_rate)
-        if self.count == 0:
-            # Wait for downstream operators to come online.
-            time.sleep(0.2)
-        self.count += 1
-        if self.count > self.send_up_to:
-            raise StopIteration()
-        return [Record(
-            key=str(self.count % self.num_keys), 
-            value=self.count,
+        # time.sleep(1 / self.send_rate)
+        # if self.count == 0:
+        #     # Wait for downstream operators to come online.
+        #     time.sleep(0.2)
+        # self.count += 1
+        # if self.count > self.send_up_to:
+        #     raise StopIteration()
+        # return [Record(
+        #     key=str(self.count % self.num_keys), 
+        #     value=self.count,
+        #     create_time=time.time()
+        # )]
+        while True:
+            stream_data = self.click_stream.xreadgroup(
+                "ralf-reader-group",
+                consumername=f"reader-{self._shard_idx}",
+                streams={"ralf": ">"},
+                count=1,
+                block=100 * 1000, # FIXME
+            )
+            if len(stream_data) > 0:
+                break
+
+        record_id, payload = stream_data[0][1][0]
+        self.click_stream.xack("ralf", "ralf-reader-group", record_id)
+
+        record_key = payload[b"key"].decode()
+        record_key = str(record_key)
+        record_value = payload[b"value"].decode()
+        record_value = int(record_value)
+
+        record = Record(
+            key=record_value % self.num_keys,
+            value=record_value,
             create_time=time.time()
-        )]
+        )
+        return [record]
 
 
 # @ray.remote
