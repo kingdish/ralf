@@ -42,7 +42,7 @@ class CounterSource(Source):
         )
         self.click_stream = redis.StrictRedis(
             host="localhost",
-            port=8003,
+            port=8002,
             db=0,
             password=None,
         )
@@ -79,8 +79,10 @@ class CounterSource(Source):
         record_value = payload[b"value"].decode()
         record_value = int(record_value)
 
+        print("yeeeeeee", record_key, record_value, "yeee")
+
         record = Record(
-            key=record_value % self.num_keys,
+            key=record_key,
             value=record_value,
             create_time=time.time()
         )
