@@ -42,24 +42,12 @@ class CounterSource(Source):
         )
         self.click_stream = redis.StrictRedis(
             host="localhost",
-            port=8003,
+            port=8002,
             db=0,
             password=None,
         )
 
     def next(self) -> Record:
-        # time.sleep(1 / self.send_rate)
-        # if self.count == 0:
-        #     # Wait for downstream operators to come online.
-        #     time.sleep(0.2)
-        # self.count += 1
-        # if self.count > self.send_up_to:
-        #     raise StopIteration()
-        # return [Record(
-        #     key=str(self.count % self.num_keys), 
-        #     value=self.count,
-        #     create_time=time.time()
-        # )]
         while True:
             stream_data = self.click_stream.xreadgroup(
                 "ralf-reader-group",
@@ -87,17 +75,6 @@ class CounterSource(Source):
             create_time=time.time()
         )
         return [record]
-
-
-# @ray.remote
-# class Sink(Operator):
-#     def __init__(self, result_queue: Queue):
-#         super().__init__(schema=None, cache_size=DEFAULT_STATE_CACHE_SIZE)
-#         self.q = result_queue
-
-#     def on_record(self, record: Record) -> Optional[Record]:
-#         self.q.put(record)
-#         return record
 
 @ray.remote
 class SlowIdentity(Operator):
@@ -127,10 +104,6 @@ class SlowIdentity(Operator):
             value=record.value,
             create_time=record.create_time,
         )
-        # user          1       1
-        # query         10      10
-        # on_record     11      2
-        # return        12      12
         self.q.put(record)
         return record
 
@@ -139,8 +112,7 @@ def create_synthetic_pipeline(queue):
     ralf = Ralf()
     
     # create pipeline
-    # source_table = Table([], CounterSource, 1000000, 3, 1000)
-    source_table = Table([], CounterSource, SEND_UP_TO, NUM_KEYS, SEND_RATE) #send_up_to, num_keys, send_rate
+    source_table = Table([], CounterSource, SEND_UP_TO, NUM_KEYS, SEND_RATE) 
 
     sink = source_table.map(
         SlowIdentity,
