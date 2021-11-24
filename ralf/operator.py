@@ -114,6 +114,8 @@ class Operator(ABC):
         schema: schema of the output table.
         cache_size: number of records stored in memory for the output table.
         lazy: whether records are produced lazily (on request) or eagerly.
+        batch_size: number of events that will be popped from the event queue
+            at a time. Events will be batch updated if possible (i.e. same key).
         num_worker_threads: number of concurrent threads with which recrods are
             produced.
         procesing_policy: a function that returns true if the first record should be
@@ -128,6 +130,7 @@ class Operator(ABC):
         schema: Schema,
         cache_size=DEFAULT_STATE_CACHE_SIZE,
         lazy: bool = False,
+        batch_update_size: int = 1,
         num_worker_threads: int = 4,
         processing_policy: Callable[[Record, Record], bool] = processing_policy.fifo,
         load_shedding_policy: Callable[
@@ -140,6 +143,7 @@ class Operator(ABC):
         self._cache_size = cache_size
         self._lru = OrderedDict()
         self._lazy = lazy
+        self._batch_update_size = batch_update_size
         self._events = PriorityQueue()
         self._running = True
         self._processing_policy = processing_policy
@@ -183,20 +187,52 @@ class Operator(ABC):
             "queue_size": self._events.qsize(),
         }
 
+    def _run_event(self, event):
+        print(f"Queue size: {self._events.qsize()}")
+        if self._table.schema is not None:
+            key = getattr(event.record, self._table.schema.primary_key)
+            try:
+                current_record = self._table.point_query(key)
+                if self._load_shedding_policy(event.record, current_record):
+                    event.process()
+            except KeyError:
+                event.process()
+        else:
+            event.process()
+
     def _worker(self):
         """Continuously processes events."""
         while self._running:
-            event = self._events.get()
-            if self._table.schema is not None:
-                key = getattr(event.record, self._table.schema.primary_key)
-                try:
-                    current_record = self._table.point_query(key)
-                    if self._load_shedding_policy(event.record, current_record):
-                        event.process()
-                except KeyError:
-                    event.process()
+            if self._batch_update_size == 1:
+                event = self._events.get()
+                self._run_event(event)
             else:
-                event.process()
+                # NOT THREAD SAFE
+                # TODO: Batch update:
+                # 1. filter event by key?
+                # 2. order event by key? Add a hashmap? Will break processing_policy?
+                # 3. Pop top 10??? and put back???
+                events = [self._events.get() for _ in range(self._batch_update_size)]
+                filtered_events = []
+                filtered_events_to_index_map = {}
+                for event in events:
+                    if self._table.schema is not None:
+                        key = getattr(event.record, self._table.schema.primary_key)
+                        if key in filtered_events_to_index_map:
+                            idx = filtered_events_to_index_map[key]
+                            filtered_events[idx] = event
+                        else:
+                            filtered_events_to_index_map[key] = len(filtered_events)
+                            filtered_events.append(event)
+                    else:
+                        filtered_events.append(event)
+                
+                print(len(filtered_events))
+                for event in filtered_events:
+                    self._run_event(event)
+
+
+                
 
     @abstractmethod
     def on_record(self, record: Record) -> Optional[Record]:

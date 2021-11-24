@@ -1,7 +1,6 @@
 import time
 from typing import List, Optional
 
-import pytest
 import ray
 from ray.util.queue import Empty, Queue
 
@@ -46,17 +45,6 @@ class CounterSource(Source):
             create_time=time.time()
         )]
 
-
-# @ray.remote
-# class Sink(Operator):
-#     def __init__(self, result_queue: Queue):
-#         super().__init__(schema=None, cache_size=DEFAULT_STATE_CACHE_SIZE)
-#         self.q = result_queue
-
-#     def on_record(self, record: Record) -> Optional[Record]:
-#         self.q.put(record)
-#         return record
-
 @ray.remote
 class SlowIdentity(Operator):
     def __init__(
@@ -65,7 +53,8 @@ class SlowIdentity(Operator):
         processing_time: float,
         processing_policy=processing_policy.fifo,
         load_shedding_policy=load_shedding_policy.always_process,
-        lazy=False
+        lazy=False,
+        batch_update_size=1
     ):
         super().__init__(
             schema=Schema("key", {"value": int}),
@@ -73,7 +62,8 @@ class SlowIdentity(Operator):
             num_worker_threads=4,
             processing_policy=processing_policy,
             load_shedding_policy=load_shedding_policy,
-            lazy=lazy
+            lazy=lazy,
+            batch_update_size=batch_update_size
         )
         self.q = result_queue
         self.processing_time = processing_time
@@ -83,7 +73,7 @@ class SlowIdentity(Operator):
         record = Record(
             key=record.key,
             value=record.value,
-            create_time=time.time(),
+            create_time=record.create_time,
         )
         self.q.put(record)
         return record
@@ -94,13 +84,15 @@ def create_synthetic_pipeline(queue):
     
     # create pipeline
     # source_table = Table([], CounterSource, 1000000, 3, 1000)
-    source_table = Table([], CounterSource, 1000000, 3000, 100000)
+    source_table = Table([], CounterSource, 1000000, 3, 10000)
 
     sink = source_table.map(
         SlowIdentity,
         queue,
         0.1,
-        lazy=True
+        lazy=True,
+        batch_update_size=1,
+        # load_shedding_policy=load_shedding_policy.newer_processing_time
     ).as_queryable("sink")
     
     # deploy
