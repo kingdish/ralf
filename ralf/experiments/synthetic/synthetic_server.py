@@ -12,6 +12,15 @@ from ralf.state import Record, Schema
 from ralf.table import Table
 from ralf.client import RalfClient
 
+import redis
+
+SEND_UP_TO = 100 # 1000000
+NUM_KEYS = 30 # 3000
+SEND_RATE = 500
+RUN_DURATION = 60
+LAZY = False
+PROCESSING_TIME = 0.001
+
 @ray.remote
 class CounterSource(Source):
     def __init__(self, send_up_to: int, num_keys: int, send_rate: float):
@@ -30,20 +39,41 @@ class CounterSource(Source):
                 }),
             cache_size=DEFAULT_STATE_CACHE_SIZE,
         )
+        self.click_stream = redis.StrictRedis(
+            host="localhost",
+            port=8002,
+            db=0,
+            password=None,
+        )
 
     def next(self) -> Record:
-        time.sleep(1 / self.send_rate)
-        if self.count == 0:
-            # Wait for downstream operators to come online.
-            time.sleep(0.2)
-        self.count += 1
-        if self.count > self.send_up_to:
-            raise StopIteration()
-        return [Record(
-            key=str(self.count % self.num_keys), 
-            value=self.count,
+        while True:
+            stream_data = self.click_stream.xreadgroup(
+                "ralf-reader-group",
+                consumername=f"reader-{self._shard_idx}",
+                streams={"ralf": ">"},
+                count=1,
+                block=100 * 1000, # FIXME
+            )
+            if len(stream_data) > 0:
+                break
+
+        record_id, payload = stream_data[0][1][0]
+        self.click_stream.xack("ralf", "ralf-reader-group", record_id)
+
+        record_key = payload[b"key"].decode()
+        record_key = str(record_key)
+        record_value = payload[b"value"].decode()
+        record_value = int(record_value)
+
+        print("yeeeeeee", record_key, record_value, "yeee")
+
+        record = Record(
+            key=record_key,
+            value=record_value,
             create_time=time.time()
-        )]
+        )
+        return [record]
 
 @ray.remote
 class SlowIdentity(Operator):
@@ -69,7 +99,7 @@ class SlowIdentity(Operator):
         self.processing_time = processing_time
 
     def on_record(self, record: Record) -> Optional[Record]:
-        time.sleep(self.processing_time)
+        time.sleep(self.processing_time)  # this is the artificial procesing time eg. featurization
         record = Record(
             key=record.key,
             value=record.value,
@@ -83,14 +113,13 @@ def create_synthetic_pipeline(queue):
     ralf = Ralf()
     
     # create pipeline
-    # source_table = Table([], CounterSource, 1000000, 3, 1000)
-    source_table = Table([], CounterSource, 1000000, 3, 10000)
+    source_table = Table([], CounterSource, SEND_UP_TO, NUM_KEYS, SEND_RATE) 
 
     sink = source_table.map(
         SlowIdentity,
         queue,
-        0.1,
-        lazy=True,
+        PROCESSING_TIME,
+        lazy=LAZY,
         batch_update_size=1,
         # load_shedding_policy=load_shedding_policy.newer_processing_time
     ).as_queryable("sink")
@@ -109,7 +138,7 @@ def main():
     ralf.run()
 
     # snapshot stats
-    run_duration = 20
+    run_duration = RUN_DURATION
     snapshot_interval = 2
     start = time.time()
     while time.time() - start < run_duration:

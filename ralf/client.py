@@ -8,6 +8,7 @@ class RalfClient:
     def point_query(self, *, table_name, key):
         url = f"{self.base_url}/{table_name}/{key}"
         print(f"querying {url}...")
+        # print("11111111",requests.get(url).json()['key'])
         return requests.get(url).json()
 
     def bulk_query(self, *, table_name):

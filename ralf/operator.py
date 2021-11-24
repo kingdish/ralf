@@ -334,6 +334,9 @@ class Operator(ABC):
                 return record
         else:
             record = self._table.point_query(key)
+            # print("recorddd", record)
+            # print("keyyy", record.json()['key'])
+            # print("valuee", record['value'])
             return record
 
     def get_all(self):
