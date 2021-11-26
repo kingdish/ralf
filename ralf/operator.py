@@ -188,11 +188,12 @@ class Operator(ABC):
         }
 
     def _run_event(self, event):
-        print(f"Queue size: {self._events.qsize()}")
+        # print(f"Queue size: {self._events.qsize()}")
         if self._table.schema is not None:
             key = getattr(event.record, self._table.schema.primary_key)
             try:
                 current_record = self._table.point_query(key)
+                # print(current_record["create_time"])
                 if self._load_shedding_policy(event.record, current_record):
                     event.process()
             except KeyError:
@@ -212,7 +213,7 @@ class Operator(ABC):
                 # 1. filter event by key?
                 # 2. order event by key? Add a hashmap? Will break processing_policy?
                 # 3. Pop top 10??? and put back???
-                events = [self._events.get() for _ in range(self._batch_update_size)]
+                events = [self._events.get() for _ in range(self._batch_update_size) if not self._events.empty()]
                 filtered_events = []
                 filtered_events_to_index_map = {}
                 for event in events:
@@ -227,7 +228,7 @@ class Operator(ABC):
                     else:
                         filtered_events.append(event)
                 
-                print(len(filtered_events))
+                # print(len(filtered_events))
                 for event in filtered_events:
                     self._run_event(event)
 

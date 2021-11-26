@@ -17,6 +17,10 @@ from synthetic_server import SEND_UP_TO, NUM_KEYS, SEND_RATE, RUN_DURATION
 from statistics import mean
 from concurrent.futures import ThreadPoolExecutor
 
+QUERY_RATE = 100
+QUERY_TIME = 5
+NUM_RUN = 3
+
 client = RalfClient()
 
 
@@ -36,6 +40,7 @@ def make_redis_producer():
 def send_data():
     producer = make_redis_producer()
     for i in range(SEND_UP_TO):
+    # for i in range(NUM_KEYS*20):
         producer.xadd("ralf", {
             "key": i % NUM_KEYS,
             "value": i, 
@@ -43,28 +48,53 @@ def send_data():
 
 def query_data(i, start_query_time, latency_arr, staleness_arr):
     record = client.point_query(key=i, table_name="sink")
-    latency_arr[i] = time.time() - start_query_time
-    staleness_arr[i] = time.time() - record['create_time']
+    latency_arr.append(time.time() - start_query_time)
+    staleness_arr.append(time.time() - record['create_time'])
 
-
-def main():
-    
-    start_time = time.time()
-    send_data()
-
-    latency_arr = [0 for _ in range(NUM_KEYS)]
-    staleness_arr = [0 for _ in range(NUM_KEYS)]
+def scan_query():
+    # latency_arr = [0 for _ in range(NUM_KEYS)]
+    latency_arr = []
+    staleness_arr = []
     threads = []
     for i in range(NUM_KEYS):
         start_query_time = time.time()
         thread = threading.Thread(target=query_data,args=(i,start_query_time,latency_arr, staleness_arr)) # get ~100 threads & send back the time after query 
         thread.start() 
         threads.append(thread)
+        time.sleep(1/QUERY_RATE)
 
     for t in threads:
         t.join()
-    print("mean latency: ", mean(latency_arr))
-    print("mean staleness: ", mean(staleness_arr))
+    
+    return latency_arr, staleness_arr
+
+def single_key_query(key):
+    latency_arr = []
+    staleness_arr = []
+    threads = []
+    for _ in range(QUERY_RATE * QUERY_TIME):
+        start_query_time = time.time()
+        thread = threading.Thread(target=query_data,args=(key,start_query_time,latency_arr, staleness_arr)) # get ~100 threads & send back the time after query 
+        thread.start()
+        threads.append(thread)
+        time.sleep(1/QUERY_RATE)
+
+    for t in threads:
+        t.join()
+    
+    return latency_arr, staleness_arr
+
+def main():
+    send_data()
+    run_latency = []
+    run_staleness = []
+    for _ in range(NUM_RUN):
+        latency_arr, staleness_arr = single_key_query(0)
+        run_latency.append(mean(latency_arr))
+        run_staleness.append(mean(staleness_arr))
+        print("Run finished")
+    print(f"mean latency: {mean(run_latency[1:])}; latency: {run_latency}")
+    print(f"mean staleness: {mean(run_staleness[1:])}; staleness: {run_staleness}")
 
 
 if __name__ == "__main__":
