@@ -78,6 +78,7 @@ class TableState:
 
     def point_query(self, key) -> Record:
         if key not in self.records:
+            print(f"{time.time()} Key {key} not found.")
             raise KeyError(f"Key {key} not found.")
         # return self.records[key]
         return self.records[key][-1][0]

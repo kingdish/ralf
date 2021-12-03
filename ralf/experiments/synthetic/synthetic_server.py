@@ -13,13 +13,16 @@ from ralf.table import Table
 
 import redis
 
+import asyncio
+import traceback
+
 SEND_UP_TO = 60000 # 1000000
 NUM_KEYS = 1 # 3000
-SEND_RATE = 1
-RUN_DURATION = 60
-LAZY = False
+SEND_RATE = 10
+RUN_DURATION = 90
+LAZY = True
 PROCESSING_TIME = 0.01
-BATCH_UPDATE_SIZE = 1
+BATCH_UPDATE_SIZE = 10
 
 @ray.remote
 class CounterSource(Source):
@@ -46,8 +49,22 @@ class CounterSource(Source):
             password=None,
         )
 
+    async def _next(self):
+        while True:
+            try:
+                await asyncio.sleep(1/SEND_RATE)
+                records = self.next()
+            except Exception as e:
+                if not isinstance(e, StopIteration):
+                    traceback.print_exc()
+                return
+            # TODO(peter): optimize by adding batch send.
+            for record in records:
+                self.send(record)
+            # Yield the coroutine so it can be queried.
+            await asyncio.sleep(0)
+
     def next(self) -> Record:
-        time.sleep(1/SEND_RATE)
         while True:
             stream_data = self.click_stream.xreadgroup(
                 "ralf-reader-group",
@@ -106,7 +123,7 @@ class SlowIdentity(Operator):
             value=record.value,
             create_time=record.create_time,
         )
-        self.q.put(record)
+        # self.q.put(record)
         return record
 
 
@@ -140,22 +157,23 @@ def main():
 
     # snapshot stats
     run_duration = RUN_DURATION
-    # snapshot_interval = 2
+    snapshot_interval = 30
     start = time.time()
     while time.time() - start < run_duration:
-        pass
-        # snapshot_time = ralf.snapshot()
-        # remaining_time = snapshot_interval - snapshot_time
-        # if remaining_time < 0:
-        #     print(
-        #         f"snapshot interval is {snapshot_interval} but it took {snapshot_time} to perform it!"
-        #     )
-        #     time.sleep(0)
-        # else:
-        #     print("writing snapshot", snapshot_time)
-        #     # records: List[Record] = [queue.get() for _ in range(2)]
-        #     # print([f"{record}: {record.latest_query_time - record.create_time}" for record in records])
-        #     time.sleep(remaining_time)
+        # pass
+        snapshot_time = ralf.snapshot()
+        remaining_time = snapshot_interval - snapshot_time
+        if remaining_time < 0:
+            print(
+                f"snapshot interval is {snapshot_interval} but it took {snapshot_time} to perform it!"
+            )
+            time.sleep(0)
+        else:
+            print("writing snapshot", snapshot_time)
+            # records: List[Record] = [queue.get() for _ in range(2)]
+            # print([f"{record}: {record.latest_query_time - record.create_time}" for record in records])
+            time.sleep(remaining_time)
+    # ralf.snapshot()
 
 
 if __name__ == "__main__":

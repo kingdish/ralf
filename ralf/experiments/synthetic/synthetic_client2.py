@@ -17,7 +17,7 @@ from synthetic_server import SEND_UP_TO, NUM_KEYS, SEND_RATE, RUN_DURATION
 from statistics import mean
 from concurrent.futures import ThreadPoolExecutor
 
-QUERY_RATE = 100
+QUERY_RATE = 1000
 QUERY_TIME = 5
 NUM_RUN = 3
 
@@ -39,17 +39,18 @@ def make_redis_producer():
 
 def send_data():
     producer = make_redis_producer()
-    for i in range(SEND_UP_TO):
+    data = [{"key": i % NUM_KEYS, "value": i} for i in range(SEND_UP_TO)]
+    # for i in range(SEND_UP_TO):
     # for i in range(NUM_KEYS*20):
-        producer.xadd("ralf", {
-            "key": i % NUM_KEYS,
-            "value": i, 
-        })
+    for d in data:
+        producer.xadd("ralf", d)
 
 def query_data(i, start_query_time, latency_arr, staleness_arr):
+    pre_query_time = time.time()
     record = client.point_query(key=i, table_name="sink")
-    latency_arr.append(time.time() - start_query_time)
-    staleness_arr.append(time.time() - record['create_time'])
+    post_query_time = time.time()
+    latency_arr.append(post_query_time - pre_query_time)
+    staleness_arr.append(post_query_time - record['create_time'])
 
 def scan_query():
     # latency_arr = [0 for _ in range(NUM_KEYS)]
@@ -72,7 +73,7 @@ def single_key_query(key):
     latency_arr = []
     staleness_arr = []
     threads = []
-    for _ in range(QUERY_RATE * QUERY_TIME):
+    for _ in range(int(QUERY_RATE * QUERY_TIME)):
         start_query_time = time.time()
         thread = threading.Thread(target=query_data,args=(key,start_query_time,latency_arr, staleness_arr)) # get ~100 threads & send back the time after query 
         thread.start()
@@ -98,5 +99,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # app.run(main)
     main()

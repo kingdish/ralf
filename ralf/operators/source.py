@@ -11,6 +11,7 @@ from ray.actor import ActorHandle
 from ralf.operator import DEFAULT_STATE_CACHE_SIZE, Operator
 from ralf.state import Record, Schema
 
+# from ralf.experiments.synthetic.synthetic_server import SEND_RATE
 
 class Source(Operator, ABC):
     def __init__(self, schema: Schema, cache_size=DEFAULT_STATE_CACHE_SIZE, **kwargs):
