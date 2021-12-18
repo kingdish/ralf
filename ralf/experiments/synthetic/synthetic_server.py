@@ -2,7 +2,6 @@ import time
 from typing import List, Optional
 
 import ray
-from ray.util.queue import Queue
 
 from ralf.core import Ralf
 from ralf.operator import DEFAULT_STATE_CACHE_SIZE, Operator
@@ -16,21 +15,21 @@ import redis
 import asyncio
 import traceback
 
-SEND_UP_TO = 60000 # 1000000
-NUM_KEYS = 1 # 3000
-SEND_RATE = 10
-RUN_DURATION = 90
-LAZY = True
-PROCESSING_TIME = 0.01
-BATCH_UPDATE_SIZE = 10
+# SEND_UP_TO = 60000 # 1000000
+# NUM_KEYS = 1 # 3000
+# SEND_RATE = 100
+# RUN_DURATION = 90
+# LAZY = False
+# PROCESSING_TIME = 0.01
+# BATCH_UPDATE_SIZE = 10
 
 @ray.remote
 class CounterSource(Source):
-    def __init__(self, send_up_to: int, num_keys: int, send_rate: float):
+    def __init__(self, send_up_to: int, num_keys: int, update_rate: float):
         self.count = 0
         self.send_up_to = send_up_to
         self.num_keys = num_keys
-        self.send_rate = send_rate
+        self.update_rate = update_rate
         self.num_worker_threads = 4
 
         super().__init__(
@@ -52,7 +51,7 @@ class CounterSource(Source):
     async def _next(self):
         while True:
             try:
-                await asyncio.sleep(1/SEND_RATE)
+                await asyncio.sleep(1/self.update_rate)
                 records = self.next()
             except Exception as e:
                 if not isinstance(e, StopIteration):
@@ -84,8 +83,6 @@ class CounterSource(Source):
         record_value = payload[b"value"].decode()
         record_value = int(record_value)
 
-        # print("yeeeeeee", record_key, record_value, "yeee")
-
         record = Record(
             key=record_key,
             value=record_value,
@@ -97,7 +94,6 @@ class CounterSource(Source):
 class SlowIdentity(Operator):
     def __init__(
         self,
-        result_queue: Queue,
         processing_time: float,
         processing_policy=processing_policy.fifo,
         load_shedding_policy=load_shedding_policy.always_process,
@@ -113,7 +109,6 @@ class SlowIdentity(Operator):
             lazy=lazy,
             batch_update_size=batch_update_size
         )
-        self.q = result_queue
         self.processing_time = processing_time
 
     def on_record(self, record: Record) -> Optional[Record]:
@@ -123,22 +118,27 @@ class SlowIdentity(Operator):
             value=record.value,
             create_time=record.create_time,
         )
-        # self.q.put(record)
         return record
 
 
-def create_synthetic_pipeline(queue):
+def create_synthetic_pipeline(
+    send_up_to,
+    num_keys,
+    update_rate,
+    processing_time,
+    is_lazy,
+    batch_update_size
+):
     ralf = Ralf()
     
     # create pipeline
-    source_table = Table([], CounterSource, SEND_UP_TO, NUM_KEYS, SEND_RATE) 
+    source_table = Table([], CounterSource, send_up_to, num_keys, update_rate) 
 
     sink = source_table.map(
         SlowIdentity,
-        queue,
-        PROCESSING_TIME,
-        lazy=LAZY,
-        batch_update_size=BATCH_UPDATE_SIZE,
+        processing_time,
+        lazy=is_lazy,
+        batch_update_size=batch_update_size,
         # load_shedding_policy=load_shedding_policy.newer_processing_time
     ).as_queryable("sink")
     
@@ -149,18 +149,30 @@ def create_synthetic_pipeline(queue):
     return ralf
 
 
-def main():
+def main(argv=None):
+    send_up_to = argv.get("send_up_to", 100000)
+    num_keys = argv.get("num_keys", 1)
+    run_duration = argv.get("run_duration", 90)
+    is_lazy = argv.get("is_lazy", False)
+    processing_time = argv.get("processing_time", 0.01)
+    batch_update_size = argv.get("batch_update_size", 1)
+    update_rate = argv.get("update_rate", 10)
+
     # create synthetic pipeline
-    queue = Queue()
-    ralf = create_synthetic_pipeline(queue)
+    ralf = create_synthetic_pipeline(
+        send_up_to=send_up_to,
+        num_keys=num_keys,
+        update_rate=update_rate,
+        processing_time=processing_time,
+        is_lazy=is_lazy,
+        batch_update_size=batch_update_size
+    )
     ralf.run()
 
     # snapshot stats
-    run_duration = RUN_DURATION
     snapshot_interval = 30
     start = time.time()
     while time.time() - start < run_duration:
-        # pass
         snapshot_time = ralf.snapshot()
         remaining_time = snapshot_interval - snapshot_time
         if remaining_time < 0:
@@ -170,9 +182,10 @@ def main():
             time.sleep(0)
         else:
             print("writing snapshot", snapshot_time)
-            # records: List[Record] = [queue.get() for _ in range(2)]
-            # print([f"{record}: {record.latest_query_time - record.create_time}" for record in records])
             time.sleep(remaining_time)
+    
+    if 'result' in argv:
+        argv['result'] = ralf.pipeline_view()["Table(SlowIdentity)"]['actor_state'][0]['table']['num_updates']
     # ralf.snapshot()
 
 
